@@ -80,22 +80,37 @@ def get_used_ips() -> List[str]:
     """Get list of IP addresses currently in use from both wg0.conf and client configs."""
     used_ips = []
     
-    # Check main WireGuard config
-    wg0_config = Path(settings.WIREGUARD_CONFIG_DIR) / f"{settings.SERVER_INTERFACE}.conf"
-    if wg0_config.exists():
-        try:
-            content = wg0_config.read_text()
-            # Find all AllowedIPs entries
-            for line in content.splitlines():
-                if line.strip().startswith('AllowedIPs'):
-                    ips = line.split('=')[1].strip().split(',')
-                    for ip in ips:
+    try:
+        # Get IPs directly from WireGuard interface
+        output = subprocess.check_output(["wg", "show", settings.SERVER_INTERFACE, "dump"]).decode()
+        for line in output.splitlines():
+            if line:
+                parts = line.split('\t')
+                if len(parts) >= 4:  # Public key, PSK, Endpoint, Allowed IPs
+                    allowed_ips = parts[3].split(',')
+                    for ip in allowed_ips:
                         ip = ip.strip()
                         if ip.startswith('10.'):  # Only collect VPN IPs
                             ip = ip.split('/')[0]  # Remove subnet mask
                             used_ips.append(ip)
-        except Exception as e:
-            print(f"Warning: Error reading {wg0_config}: {str(e)}")
+    except subprocess.CalledProcessError:
+        # If wg command fails, try reading from config files
+        # Check main WireGuard config
+        wg0_config = Path(settings.WIREGUARD_CONFIG_DIR) / f"{settings.SERVER_INTERFACE}.conf"
+        if wg0_config.exists():
+            try:
+                content = wg0_config.read_text()
+                # Find all AllowedIPs entries
+                for line in content.splitlines():
+                    if line.strip().startswith('AllowedIPs'):
+                        ips = line.split('=')[1].strip().split(',')
+                        for ip in ips:
+                            ip = ip.strip()
+                            if ip.startswith('10.'):  # Only collect VPN IPs
+                                ip = ip.split('/')[0]  # Remove subnet mask
+                                used_ips.append(ip)
+            except Exception as e:
+                print(f"Warning: Error reading {wg0_config}: {str(e)}")
     
     # Check client configs
     clients_dir = Path(settings.WIREGUARD_CLIENTS_DIR)
@@ -174,7 +189,7 @@ def create_client_config(client_name: str, client_ip: str, local_networks: Optio
         # For client config, we use /24 for the interface address and 10.10.20.0/24 for allowed IPs
         client_config = f"""[Interface]
 PrivateKey = {client_private_key}
-Address = {client_ip}/24
+Address = {client_ip}/32
 DNS = {settings.DNS_SERVERS}
 
 [Peer]
@@ -197,12 +212,6 @@ PersistentKeepalive = 25"""
         # If WireGuard command succeeds, write the config file
         config_path.write_text(client_config)
         config_path.chmod(0o600)
-        
-        # Add a comment to identify the peer in wg0.conf
-        wg0_conf = Path(settings.WIREGUARD_CONFIG_DIR) / f"{settings.SERVER_INTERFACE}.conf"
-        if wg0_conf.exists():
-            with open(wg0_conf, "a") as f:
-                f.write(f"\n# {client_name}\n")
         
         # Save the WireGuard configuration
         subprocess.check_call(["wg-quick", "save", settings.SERVER_INTERFACE])
@@ -306,7 +315,7 @@ def list_clients() -> List[Dict[str, str]]:
             "name": config_file.stem,
             "ip": ip_match.group(1) if ip_match else "Unknown",
             "public_key": pubkey_match.group(1) if pubkey_match else "Unknown",
-            "allowed_ips": ", ".join(allowed_ips) if allowed_ips else "0.0.0.0/0",
+            "allowed_ips": ", ".join(allowed_ips) if allowed_ips else "10.10.20.0/24",
             "local_networks": ", ".join(local_networks) if local_networks else "None"
         })
     
