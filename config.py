@@ -9,6 +9,7 @@ load_dotenv()
 
 class Settings(BaseSettings):
     WIREGUARD_CONFIG_DIR: str = "/etc/wireguard"
+    WIREGUARD_CLIENTS_DIR: str = "/etc/wireguard/clients"
     SERVER_INTERFACE: str = "wg0"
     
     # These will be loaded from existing config if available
@@ -51,9 +52,21 @@ class Settings(BaseSettings):
 settings = Settings()
 
 def ensure_config_dir():
-    """Ensure the WireGuard configuration directory exists."""
-    Path(settings.WIREGUARD_CONFIG_DIR).mkdir(parents=True, exist_ok=True)
+    """Ensure the WireGuard configuration directories exist."""
+    # Create main config dir
+    config_dir = Path(settings.WIREGUARD_CONFIG_DIR)
+    config_dir.mkdir(parents=True, exist_ok=True)
     
+    # Create clients dir
+    clients_dir = Path(settings.WIREGUARD_CLIENTS_DIR)
+    clients_dir.mkdir(parents=True, exist_ok=True)
+    
+    return clients_dir
+
 def get_client_config_path(client_name: str) -> Path:
     """Get the path for a client's configuration file."""
-    return Path(settings.WIREGUARD_CONFIG_DIR) / f"{client_name}.conf" 
+    clients_dir = ensure_config_dir()
+    config_path = clients_dir / f"{client_name}.conf"
+    # Touch the file to ensure it exists and is writable
+    config_path.touch(mode=0o600, exist_ok=True)
+    return config_path 

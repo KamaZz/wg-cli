@@ -87,8 +87,22 @@ AllowedIPs = 0.0.0.0/0
 Endpoint = {settings.SERVER_PUBLIC_IP}:{settings.SERVER_PORT}
 PersistentKeepalive = 25"""
 
+    # Get config path and ensure parent directory exists
     config_path = get_client_config_path(client_name)
-    config_path.write_text(client_config)
+    
+    try:
+        # Write configuration with secure permissions
+        config_path.write_text(client_config)
+        config_path.chmod(0o600)  # Set secure permissions (only owner can read/write)
+    except Exception as e:
+        # If writing fails, try to clean up
+        try:
+            if config_path.exists():
+                config_path.unlink()
+            remove_client_from_wg(client_public_key)
+        except:
+            pass
+        raise Exception(f"Failed to write client configuration: {str(e)}")
     
     return {
         "private_key": client_private_key,
@@ -112,9 +126,9 @@ def get_available_ip() -> str:
 def get_used_ips() -> List[str]:
     """Get list of IP addresses currently in use."""
     used_ips = []
-    config_dir = Path(settings.WIREGUARD_CONFIG_DIR)
+    clients_dir = Path(settings.WIREGUARD_CLIENTS_DIR)
     
-    for config_file in config_dir.glob("*.conf"):
+    for config_file in clients_dir.glob("*.conf"):
         content = config_file.read_text()
         ip_match = re.search(r"Address = ([\d\.]+)/", content)
         if ip_match:
@@ -163,12 +177,9 @@ def delete_client(client_name: str) -> None:
 def list_clients() -> List[Dict[str, str]]:
     """List all configured clients."""
     clients = []
-    config_dir = Path(settings.WIREGUARD_CONFIG_DIR)
+    clients_dir = Path(settings.WIREGUARD_CLIENTS_DIR)
     
-    for config_file in config_dir.glob("*.conf"):
-        if config_file.stem == settings.SERVER_INTERFACE:
-            continue
-            
+    for config_file in clients_dir.glob("*.conf"):
         content = config_file.read_text()
         ip_match = re.search(r"Address = ([\d\.]+/\d+)", content)
         pubkey_match = re.search(r"PublicKey = (.+)", content)
