@@ -51,15 +51,8 @@ def remove_client_from_wg(public_key: str) -> None:
         raise Exception(f"Failed to remove client from WireGuard: {str(e)}")
 
 def generate_qr_code(client_name: str) -> Path:
-    """Generate QR code for client configuration.
-    
-    Args:
-        client_name: Name of the client
-        
-    Returns:
-        Path to the generated QR code PNG file
-    """
-    config_path = get_client_config_path(client_name)
+    """Generate QR code for client configuration."""
+    config_path = get_client_config_path(client_name, create=False)
     if not config_path.exists():
         raise FileNotFoundError(f"Configuration for {client_name} not found")
     
@@ -127,7 +120,7 @@ def check_client_exists(client_name: str) -> bool:
         True if client exists, False otherwise
     """
     # Check in clients directory
-    config_path = get_client_config_path(client_name)
+    config_path = get_client_config_path(client_name, create=False)
     if config_path.exists():
         return True
     
@@ -191,7 +184,7 @@ Endpoint = {settings.SERVER_PUBLIC_IP}:{settings.SERVER_PORT}
 PersistentKeepalive = 25"""
 
         # Get config path and ensure parent directory exists
-        config_path = get_client_config_path(client_name)
+        config_path = get_client_config_path(client_name, create=True)
         
         # First try to add to WireGuard interface
         subprocess.check_output([

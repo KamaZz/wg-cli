@@ -51,7 +51,7 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-def ensure_config_dir():
+def ensure_config_dir() -> Path:
     """Ensure the WireGuard configuration directories exist."""
     # Create main config dir
     config_dir = Path(settings.WIREGUARD_CONFIG_DIR)
@@ -63,10 +63,21 @@ def ensure_config_dir():
     
     return clients_dir
 
-def get_client_config_path(client_name: str) -> Path:
-    """Get the path for a client's configuration file."""
+def get_client_config_path(client_name: str, create: bool = False) -> Path:
+    """Get the path for a client's configuration file.
+    
+    Args:
+        client_name: Name of the client
+        create: Whether to create the file if it doesn't exist
+        
+    Returns:
+        Path object for the client's config file
+    """
     clients_dir = ensure_config_dir()
     config_path = clients_dir / f"{client_name}.conf"
-    # Touch the file to ensure it exists and is writable
-    config_path.touch(mode=0o600, exist_ok=True)
+    
+    if create:
+        # Touch the file to ensure it exists and is writable
+        config_path.touch(mode=0o600, exist_ok=True)
+    
     return config_path 
