@@ -46,21 +46,29 @@ def cli():
 
 @cli.command()
 @click.argument('client_name')
-def add_client(client_name):
-    """Create a new WireGuard client configuration."""
+@click.option('--local-network', '-n', multiple=True, help='Local network subnet to allow access (e.g., 192.168.1.0/24). Can be specified multiple times.')
+def add_client(client_name, local_network):
+    """Create a new WireGuard client configuration.
+    
+    Optionally specify local networks the client can access using --local-network or -n option.
+    Example: add-client myclient -n 192.168.1.0/24 -n 192.168.2.0/24
+    """
     check_root()
     try:
         # Get next available IP
         client_ip = get_available_ip()
         
         # Create client configuration
-        result = create_client_config(client_name, client_ip)
+        local_networks = list(local_network) if local_network else None
+        result = create_client_config(client_name, client_ip, local_networks)
         
         # Generate QR code
         qr_path = generate_qr_code(client_name)
         
         console.print(f"[green]Successfully created client '{client_name}'[/green]")
         console.print(f"IP Address: {result['ip_address']}")
+        if result['local_networks']:
+            console.print(f"Local Networks: {', '.join(result['local_networks'])}")
         console.print(f"Config file: {result['config_path']}")
         console.print(f"QR Code: {qr_path}")
         

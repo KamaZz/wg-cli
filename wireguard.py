@@ -12,8 +12,52 @@ def generate_keypair() -> Tuple[str, str]:
     public_key = subprocess.check_output(["wg", "pubkey"], input=private_key.encode()).decode().strip()
     return private_key, public_key
 
-def create_client_config(client_name: str, client_ip: str) -> Dict[str, str]:
-    """Create a new client configuration."""
+def add_client_to_wg(client_name: str, public_key: str, allowed_ips: List[str]) -> None:
+    """Add a new client to WireGuard interface using wg command."""
+    try:
+        # Check for subnet conflicts
+        for ip in allowed_ips:
+            if not ip.startswith('10.') and check_subnet_conflict(ip):
+                raise Exception(f"Subnet conflict: {ip} is already in use by another client")
+        
+        # Add peer to WireGuard interface
+        cmd = [
+            "wg", "set", settings.SERVER_INTERFACE,
+            "peer", public_key,
+            "allowed-ips", ",".join(allowed_ips),
+            "endpoint", "0.0.0.0:0"  # Initial endpoint, will be updated when client connects
+        ]
+        subprocess.check_call(cmd)
+        
+        # Save the configuration
+        subprocess.check_call(["wg-quick", "save", settings.SERVER_INTERFACE])
+    except subprocess.CalledProcessError as e:
+        raise Exception(f"Failed to add client to WireGuard: {str(e)}")
+
+def remove_client_from_wg(public_key: str) -> None:
+    """Remove a client from WireGuard interface using wg command."""
+    try:
+        # Remove peer from WireGuard interface
+        cmd = [
+            "wg", "set", settings.SERVER_INTERFACE,
+            "peer", public_key,
+            "remove"
+        ]
+        subprocess.check_call(cmd)
+        
+        # Save the configuration
+        subprocess.check_call(["wg-quick", "save", settings.SERVER_INTERFACE])
+    except subprocess.CalledProcessError as e:
+        raise Exception(f"Failed to remove client from WireGuard: {str(e)}")
+
+def create_client_config(client_name: str, client_ip: str, local_networks: Optional[List[str]] = None) -> Dict[str, str]:
+    """Create a new client configuration.
+    
+    Args:
+        client_name: Name of the client
+        client_ip: VPN IP address for the client
+        local_networks: Optional list of local network subnets (e.g., ["192.168.1.0/24"])
+    """
     client_private_key, client_public_key = generate_keypair()
     
     # Ensure server keys exist
@@ -22,6 +66,16 @@ def create_client_config(client_name: str, client_ip: str) -> Dict[str, str]:
         settings.SERVER_PRIVATE_KEY = server_private_key
         settings.SERVER_PUBLIC_KEY = server_public_key
     
+    # Prepare allowed IPs
+    allowed_ips = [f"{client_ip}/32"]
+    if local_networks:
+        allowed_ips.extend(local_networks)
+    
+    # Add client to WireGuard interface
+    add_client_to_wg(client_name, client_public_key, allowed_ips)
+    
+    # For client config, we use /24 for the interface address and 0.0.0.0/0 for allowed IPs
+    # This ensures the client routes all traffic through VPN but can still access allowed local networks
     client_config = f"""[Interface]
 PrivateKey = {client_private_key}
 Address = {client_ip}/24
@@ -40,7 +94,8 @@ PersistentKeepalive = 25"""
         "private_key": client_private_key,
         "public_key": client_public_key,
         "config_path": str(config_path),
-        "ip_address": client_ip
+        "ip_address": client_ip,
+        "local_networks": local_networks or []
     }
 
 def get_available_ip() -> str:
@@ -84,14 +139,26 @@ def generate_qr_code(client_name: str) -> None:
     return qr_path
 
 def delete_client(client_name: str) -> None:
-    """Delete a client configuration."""
+    """Delete a client configuration and remove from WireGuard."""
     config_path = get_client_config_path(client_name)
-    if config_path.exists():
-        config_path.unlink()
-        # Also delete QR code if it exists
-        qr_path = config_path.with_suffix('.png')
-        if qr_path.exists():
-            qr_path.unlink()
+    if not config_path.exists():
+        raise FileNotFoundError(f"Configuration for {client_name} not found")
+    
+    # Get client's public key before deleting the config
+    content = config_path.read_text()
+    pubkey_match = re.search(r"PublicKey = (.+)", content)
+    if pubkey_match:
+        public_key = pubkey_match.group(1).strip()
+        # Remove from WireGuard interface
+        remove_client_from_wg(public_key)
+    
+    # Delete configuration file
+    config_path.unlink()
+    
+    # Delete QR code if it exists
+    qr_path = config_path.with_suffix('.png')
+    if qr_path.exists():
+        qr_path.unlink()
 
 def list_clients() -> List[Dict[str, str]]:
     """List all configured clients."""
@@ -277,3 +344,28 @@ def check_handshake_alert(handshake_time: Optional[datetime]) -> bool:
         
     alert_threshold = datetime.now() - timedelta(days=settings.HANDSHAKE_ALERT_DAYS)
     return handshake_time < alert_threshold 
+
+def get_used_subnets() -> List[str]:
+    """Get list of local network subnets currently in use by clients."""
+    used_subnets = []
+    try:
+        output = subprocess.check_output(["wg", "show", settings.SERVER_INTERFACE]).decode()
+        for line in output.split('\n'):
+            if line.strip().startswith('allowed ips:'):
+                ips = line.split(':', 1)[1].strip().split(',')
+                for ip in ips:
+                    ip = ip.strip()
+                    # Only collect non-VPN subnets (assuming VPN is in 10.x.x.x range)
+                    if not ip.startswith('10.') and '/' in ip:
+                        used_subnets.append(ip)
+    except subprocess.CalledProcessError:
+        pass
+    return used_subnets
+
+def check_subnet_conflict(subnet: str) -> bool:
+    """Check if a subnet conflicts with existing client subnets."""
+    used_subnets = get_used_subnets()
+    for used_subnet in used_subnets:
+        if used_subnet == subnet:
+            return True
+    return False 
