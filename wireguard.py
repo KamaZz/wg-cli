@@ -129,57 +129,33 @@ def list_clients() -> List[Dict[str, str]]:
     
     return clients
 
-def parse_handshake_time(handshake_str: str) -> Optional[datetime]:
-    """Parse handshake time string into datetime object."""
-    if handshake_str == "Never":
-        return None
-        
-    try:
-        # Handle different time formats
-        if "minute" in handshake_str:
-            minutes = int(handshake_str.split()[0])
-            return datetime.now() - timedelta(minutes=minutes)
-        elif "hour" in handshake_str:
-            hours = int(handshake_str.split()[0])
-            return datetime.now() - timedelta(hours=hours)
-        elif "day" in handshake_str:
-            days = int(handshake_str.split()[0])
-            return datetime.now() - timedelta(days=days)
-        else:
-            # Try to parse as absolute time
-            return datetime.strptime(handshake_str, "%Y-%m-%d %H:%M:%S")
-    except (ValueError, IndexError):
-        return None
-
-def check_handshake_alert(handshake_time: Optional[datetime]) -> bool:
-    """Check if handshake time should trigger an alert."""
-    if handshake_time is None:
-        return True
-        
-    alert_threshold = datetime.now() - timedelta(days=settings.HANDSHAKE_ALERT_DAYS)
-    return handshake_time < alert_threshold
-
 def get_client_status() -> List[Dict[str, str]]:
     """Get the status of all connected clients."""
     try:
         output = subprocess.check_output(["wg", "show", settings.SERVER_INTERFACE]).decode()
         status = []
         current_peer = None
-        clients = {client["public_key"]: client for client in list_clients()}
+        
+        # Get all clients first
+        all_clients = list_clients()
+        # Create lookup by public key
+        clients_by_pubkey = {client["public_key"]: client for client in all_clients}
         
         for line in output.split('\n'):
             if line.startswith('peer:'):
                 if current_peer:
                     # Add client info to peer before appending
-                    if current_peer['public_key'] in clients:
-                        client = clients[current_peer['public_key']]
+                    pubkey = current_peer.get('public_key')
+                    if pubkey in clients_by_pubkey:
+                        client = clients_by_pubkey[pubkey]
                         current_peer.update({
                             'name': client['name'],
                             'ip': client['ip'],
                             'local_networks': client['local_networks']
                         })
                     # Check handshake status
-                    handshake_time = parse_handshake_time(current_peer.get('latest handshake', 'Never'))
+                    handshake_str = current_peer.get('latest handshake', 'Never')
+                    handshake_time = parse_handshake_time(handshake_str)
                     current_peer['alert'] = check_handshake_alert(handshake_time)
                     status.append(current_peer)
                 current_peer = {'public_key': line.split(':')[1].strip()}
@@ -189,18 +165,72 @@ def get_client_status() -> List[Dict[str, str]]:
         
         if current_peer:
             # Add client info to last peer
-            if current_peer['public_key'] in clients:
-                client = clients[current_peer['public_key']]
+            pubkey = current_peer.get('public_key')
+            if pubkey in clients_by_pubkey:
+                client = clients_by_pubkey[pubkey]
                 current_peer.update({
                     'name': client['name'],
                     'ip': client['ip'],
                     'local_networks': client['local_networks']
                 })
             # Check handshake status for last peer
-            handshake_time = parse_handshake_time(current_peer.get('latest handshake', 'Never'))
+            handshake_str = current_peer.get('latest handshake', 'Never')
+            handshake_time = parse_handshake_time(handshake_str)
             current_peer['alert'] = check_handshake_alert(handshake_time)
             status.append(current_peer)
+        
+        # Add offline clients (those with no current connection)
+        connected_pubkeys = {peer['public_key'] for peer in status}
+        for client in all_clients:
+            if client['public_key'] not in connected_pubkeys:
+                status.append({
+                    'name': client['name'],
+                    'ip': client['ip'],
+                    'local_networks': client['local_networks'],
+                    'public_key': client['public_key'],
+                    'latest handshake': 'Never',
+                    'transfer': '0/0',
+                    'endpoint': 'Unknown',
+                    'alert': True
+                })
             
         return status
     except subprocess.CalledProcessError:
-        return [] 
+        return []
+
+def parse_handshake_time(handshake_str: str) -> Optional[datetime]:
+    """Parse handshake time string into datetime object."""
+    if not handshake_str or handshake_str == "Never":
+        return None
+        
+    try:
+        # Handle different time formats
+        parts = handshake_str.lower().split()
+        if len(parts) >= 2:
+            try:
+                value = int(parts[0])
+                unit = parts[1]
+                
+                if "minute" in unit:
+                    return datetime.now() - timedelta(minutes=value)
+                elif "hour" in unit:
+                    return datetime.now() - timedelta(hours=value)
+                elif "day" in unit:
+                    return datetime.now() - timedelta(days=value)
+                elif "second" in unit:
+                    return datetime.now() - timedelta(seconds=value)
+            except (ValueError, IndexError):
+                pass
+                
+        # Try to parse as absolute time
+        return datetime.strptime(handshake_str, "%Y-%m-%d %H:%M:%S")
+    except (ValueError, IndexError):
+        return None
+
+def check_handshake_alert(handshake_time: Optional[datetime]) -> bool:
+    """Check if handshake time should trigger an alert."""
+    if handshake_time is None:
+        return True
+        
+    alert_threshold = datetime.now() - timedelta(days=settings.HANDSHAKE_ALERT_DAYS)
+    return handshake_time < alert_threshold 
