@@ -11,6 +11,7 @@ A command-line tool for managing WireGuard VPN server and clients.
 - Enable client-to-client network access
 - View client status
 - Automatic configuration detection from existing WireGuard setup
+- Automatic virtual environment handling
 
 ## Prerequisites
 
@@ -40,12 +41,8 @@ This will:
 
 ## Usage
 
-1. Activate the virtual environment:
-```bash
-source venv/bin/activate
-```
+Simply run the commands with sudo (no need to activate virtual environment):
 
-2. Run the commands (with sudo):
 ```bash
 # Create a new client
 sudo ./wg-cli.py add-client client_name

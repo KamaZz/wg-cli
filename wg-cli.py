@@ -1,9 +1,24 @@
 #!/usr/bin/env python3
+
+import os
+import sys
+
+# Get the absolute path of the script
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Check if running in virtual environment, if not, switch to it
+if not hasattr(sys, 'real_prefix') and not sys.prefix == os.path.join(SCRIPT_DIR, 'venv'):
+    venv_python = os.path.join(SCRIPT_DIR, 'venv', 'bin', 'python3')
+    if os.path.exists(venv_python):
+        os.execv(venv_python, [venv_python] + sys.argv)
+    else:
+        print("Virtual environment not found. Please run setup.sh first.")
+        sys.exit(1)
+
 import click
 from rich.console import Console
 from rich.table import Table
 from pathlib import Path
-import sys
 import os
 
 from config import settings, ensure_config_dir
