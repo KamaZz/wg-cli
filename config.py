@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     SERVER_ADDRESS: str = "10.0.0.1/24"
     DNS_SERVERS: str = "1.1.1.1,8.8.8.8"
     
+    # Monitoring settings
+    HANDSHAKE_ALERT_DAYS: int = 14  # Alert if handshake is older than this many days
+    
     class Config:
         env_file = ".env"
 

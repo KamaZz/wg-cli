@@ -1,9 +1,10 @@
 import subprocess
 import re
 from pathlib import Path
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 import qrcode
 from config import settings, get_client_config_path
+from datetime import datetime, timedelta
 
 def generate_keypair() -> Tuple[str, str]:
     """Generate a WireGuard private-public key pair."""
@@ -102,16 +103,61 @@ def list_clients() -> List[Dict[str, str]]:
             continue
             
         content = config_file.read_text()
-        ip_match = re.search(r"Address = ([\d\.]+)/", content)
+        ip_match = re.search(r"Address = ([\d\.]+/\d+)", content)
         pubkey_match = re.search(r"PublicKey = (.+)", content)
+        allowed_ips_match = re.search(r"AllowedIPs = (.+)", content)
+        
+        # Parse allowed IPs to separate VPN IP and local networks
+        allowed_ips = []
+        local_networks = []
+        if allowed_ips_match:
+            for ip in allowed_ips_match.group(1).split(','):
+                ip = ip.strip()
+                # If it's not the default route and not the VPN IP
+                if ip != "0.0.0.0/0" and (not ip_match or not ip.startswith(ip_match.group(1).split('/')[0])):
+                    local_networks.append(ip)
+                else:
+                    allowed_ips.append(ip)
         
         clients.append({
             "name": config_file.stem,
             "ip": ip_match.group(1) if ip_match else "Unknown",
-            "public_key": pubkey_match.group(1) if pubkey_match else "Unknown"
+            "public_key": pubkey_match.group(1) if pubkey_match else "Unknown",
+            "allowed_ips": ", ".join(allowed_ips) if allowed_ips else "0.0.0.0/0",
+            "local_networks": ", ".join(local_networks) if local_networks else "None"
         })
     
     return clients
+
+def parse_handshake_time(handshake_str: str) -> Optional[datetime]:
+    """Parse handshake time string into datetime object."""
+    if handshake_str == "Never":
+        return None
+        
+    try:
+        # Handle different time formats
+        if "minute" in handshake_str:
+            minutes = int(handshake_str.split()[0])
+            return datetime.now() - timedelta(minutes=minutes)
+        elif "hour" in handshake_str:
+            hours = int(handshake_str.split()[0])
+            return datetime.now() - timedelta(hours=hours)
+        elif "day" in handshake_str:
+            days = int(handshake_str.split()[0])
+            return datetime.now() - timedelta(days=days)
+        else:
+            # Try to parse as absolute time
+            return datetime.strptime(handshake_str, "%Y-%m-%d %H:%M:%S")
+    except (ValueError, IndexError):
+        return None
+
+def check_handshake_alert(handshake_time: Optional[datetime]) -> bool:
+    """Check if handshake time should trigger an alert."""
+    if handshake_time is None:
+        return True
+        
+    alert_threshold = datetime.now() - timedelta(days=settings.HANDSHAKE_ALERT_DAYS)
+    return handshake_time < alert_threshold
 
 def get_client_status() -> List[Dict[str, str]]:
     """Get the status of all connected clients."""
@@ -119,10 +165,22 @@ def get_client_status() -> List[Dict[str, str]]:
         output = subprocess.check_output(["wg", "show", settings.SERVER_INTERFACE]).decode()
         status = []
         current_peer = None
+        clients = {client["public_key"]: client for client in list_clients()}
         
         for line in output.split('\n'):
             if line.startswith('peer:'):
                 if current_peer:
+                    # Add client info to peer before appending
+                    if current_peer['public_key'] in clients:
+                        client = clients[current_peer['public_key']]
+                        current_peer.update({
+                            'name': client['name'],
+                            'ip': client['ip'],
+                            'local_networks': client['local_networks']
+                        })
+                    # Check handshake status
+                    handshake_time = parse_handshake_time(current_peer.get('latest handshake', 'Never'))
+                    current_peer['alert'] = check_handshake_alert(handshake_time)
                     status.append(current_peer)
                 current_peer = {'public_key': line.split(':')[1].strip()}
             elif current_peer and line.strip():
@@ -130,6 +188,17 @@ def get_client_status() -> List[Dict[str, str]]:
                 current_peer[key.strip()] = value.strip()
         
         if current_peer:
+            # Add client info to last peer
+            if current_peer['public_key'] in clients:
+                client = clients[current_peer['public_key']]
+                current_peer.update({
+                    'name': client['name'],
+                    'ip': client['ip'],
+                    'local_networks': client['local_networks']
+                })
+            # Check handshake status for last peer
+            handshake_time = parse_handshake_time(current_peer.get('latest handshake', 'Never'))
+            current_peer['alert'] = check_handshake_alert(handshake_time)
             status.append(current_peer)
             
         return status

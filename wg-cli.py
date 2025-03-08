@@ -81,13 +81,15 @@ def list_all():
         
         table = Table(show_header=True, header_style="bold magenta")
         table.add_column("Client Name")
-        table.add_column("IP Address")
+        table.add_column("WireGuard IP")
+        table.add_column("Local Networks")
         table.add_column("Public Key")
         
         for client in clients:
             table.add_row(
                 client['name'],
                 client['ip'],
+                client['local_networks'],
                 client['public_key']
             )
         
@@ -133,19 +135,34 @@ def status():
             return
         
         table = Table(show_header=True, header_style="bold magenta")
-        table.add_column("Public Key")
+        table.add_column("Client Name")
+        table.add_column("WireGuard IP")
+        table.add_column("Local Networks")
         table.add_column("Latest Handshake")
         table.add_column("Transfer (↓/↑)")
         table.add_column("Endpoint")
         
         for peer in status_list:
+            # Format row based on alert status
+            style = "red" if peer.get('alert', True) else None
+            name = f"[{style}]{peer.get('name', 'Unknown')}[/{style}]" if style else peer.get('name', 'Unknown')
+            ip = f"[{style}]{peer.get('ip', 'Unknown')}[/{style}]" if style else peer.get('ip', 'Unknown')
+            networks = f"[{style}]{peer.get('local_networks', 'None')}[/{style}]" if style else peer.get('local_networks', 'None')
+            handshake = f"[{style}]{peer.get('latest handshake', 'Never')}[/{style}]" if style else peer.get('latest handshake', 'Never')
+            transfer = f"[{style}]{peer.get('transfer', '0/0')}[/{style}]" if style else peer.get('transfer', '0/0')
+            endpoint = f"[{style}]{peer.get('endpoint', 'Unknown')}[/{style}]" if style else peer.get('endpoint', 'Unknown')
+            
             table.add_row(
-                peer.get('public_key', 'Unknown'),
-                peer.get('latest handshake', 'Never'),
-                f"{peer.get('transfer', '0/0')}",
-                peer.get('endpoint', 'Unknown')
+                name,
+                ip,
+                networks,
+                handshake,
+                transfer,
+                endpoint
             )
         
+        # Show alert threshold information
+        console.print(f"\nAlert threshold: [yellow]{settings.HANDSHAKE_ALERT_DAYS} days[/yellow] (configure with HANDSHAKE_ALERT_DAYS in .env)")
         console.print(table)
         
     except Exception as e:
