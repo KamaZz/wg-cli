@@ -50,6 +50,39 @@ def remove_client_from_wg(public_key: str) -> None:
     except subprocess.CalledProcessError as e:
         raise Exception(f"Failed to remove client from WireGuard: {str(e)}")
 
+def generate_qr_code(client_name: str) -> Path:
+    """Generate QR code for client configuration.
+    
+    Args:
+        client_name: Name of the client
+        
+    Returns:
+        Path to the generated QR code PNG file
+    """
+    config_path = get_client_config_path(client_name)
+    if not config_path.exists():
+        raise FileNotFoundError(f"Configuration for {client_name} not found")
+    
+    # Read the configuration
+    config_data = config_path.read_text()
+    
+    # Generate QR code
+    qr = qrcode.QRCode(version=1, box_size=10, border=5)
+    qr.add_data(config_data)
+    qr.make(fit=True)
+    
+    # Create QR code image
+    img = qr.make_image(fill_color="black", back_color="white")
+    
+    # Save to file
+    qr_path = config_path.with_suffix('.png')
+    img.save(str(qr_path))  # Convert Path to string for PIL's save method
+    
+    # Set proper permissions
+    qr_path.chmod(0o600)
+    
+    return qr_path
+
 def create_client_config(client_name: str, client_ip: str, local_networks: Optional[List[str]] = None) -> Dict[str, str]:
     """Create a new client configuration.
     
@@ -96,12 +129,12 @@ PersistentKeepalive = 25"""
         config_path.chmod(0o600)  # Set secure permissions (only owner can read/write)
         
         # Generate QR code
+        qr_path = None
         try:
             qr_path = generate_qr_code(client_name)
         except Exception as qr_error:
             print(f"Warning: Failed to generate QR code: {str(qr_error)}")
-            qr_path = None
-            
+        
         return {
             "private_key": client_private_key,
             "public_key": client_public_key,
@@ -143,22 +176,6 @@ def get_used_ips() -> List[str]:
             used_ips.append(ip_match.group(1))
     
     return used_ips
-
-def generate_qr_code(client_name: str) -> None:
-    """Generate QR code for client configuration."""
-    config_path = get_client_config_path(client_name)
-    if not config_path.exists():
-        raise FileNotFoundError(f"Configuration for {client_name} not found")
-    
-    config_data = config_path.read_text()
-    qr = qrcode.QRCode(version=1, box_size=10, border=5)
-    qr.add_data(config_data)
-    qr.make(fit=True)
-    
-    qr_path = config_path.with_suffix('.png')
-    img = qr.make_image(fill_color="black", back_color="white")
-    img.save(qr_path)
-    return qr_path
 
 def delete_client(client_name: str) -> None:
     """Delete a client configuration and remove from WireGuard."""
