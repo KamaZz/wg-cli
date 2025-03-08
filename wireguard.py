@@ -164,38 +164,22 @@ def create_client_config(client_name: str, client_ip: str, local_networks: Optio
         raise Exception(f"IP address {client_ip} is already in use by another client")
     
     client_private_key, client_public_key = generate_keypair()
+    config_path = None
     
-    # Ensure server keys exist
-    if not settings.SERVER_PUBLIC_KEY:
-        server_private_key, server_public_key = generate_keypair()
-        settings.SERVER_PRIVATE_KEY = server_private_key
-        settings.SERVER_PUBLIC_KEY = server_public_key
-    
-    # Prepare allowed IPs
-    allowed_ips = [f"{client_ip}/32"]
-    if local_networks:
-        allowed_ips.extend(local_networks)
-    
-    # Add client to WireGuard interface with a comment to identify it
     try:
-        subprocess.check_output([
-            "wg", "set", settings.SERVER_INTERFACE,
-            "peer", client_public_key,
-            "allowed-ips", ",".join(allowed_ips),
-            "persistent-keepalive", "25"
-        ])
+        # Ensure server keys exist
+        if not settings.SERVER_PUBLIC_KEY:
+            server_private_key, server_public_key = generate_keypair()
+            settings.SERVER_PRIVATE_KEY = server_private_key
+            settings.SERVER_PUBLIC_KEY = server_public_key
         
-        # Add a comment to identify the peer in wg0.conf
-        with open(Path(settings.WIREGUARD_CONFIG_DIR) / f"{settings.SERVER_INTERFACE}.conf", "a") as f:
-            f.write(f"\n# {client_name}\n")
+        # Prepare allowed IPs
+        allowed_ips = [f"{client_ip}/32"]
+        if local_networks:
+            allowed_ips.extend(local_networks)
         
-        # Save the configuration
-        subprocess.check_call(["wg-quick", "save", settings.SERVER_INTERFACE])
-    except subprocess.CalledProcessError as e:
-        raise Exception(f"Failed to add client to WireGuard: {str(e)}")
-    
-    # For client config, we use /24 for the interface address and 10.10.20.0/24 for allowed IPs
-    client_config = f"""[Interface]
+        # For client config, we use /24 for the interface address and 10.10.20.0/24 for allowed IPs
+        client_config = f"""[Interface]
 PrivateKey = {client_private_key}
 Address = {client_ip}/24
 DNS = {settings.DNS_SERVERS}
@@ -206,13 +190,29 @@ AllowedIPs = 10.10.20.0/24
 Endpoint = {settings.SERVER_PUBLIC_IP}:{settings.SERVER_PORT}
 PersistentKeepalive = 25"""
 
-    # Get config path and ensure parent directory exists
-    config_path = get_client_config_path(client_name)
-    
-    try:
-        # Write configuration with secure permissions
+        # Get config path and ensure parent directory exists
+        config_path = get_client_config_path(client_name)
+        
+        # First try to add to WireGuard interface
+        subprocess.check_output([
+            "wg", "set", settings.SERVER_INTERFACE,
+            "peer", client_public_key,
+            "allowed-ips", ",".join(allowed_ips),
+            "persistent-keepalive", "25"
+        ])
+        
+        # If WireGuard command succeeds, write the config file
         config_path.write_text(client_config)
         config_path.chmod(0o600)
+        
+        # Add a comment to identify the peer in wg0.conf
+        wg0_conf = Path(settings.WIREGUARD_CONFIG_DIR) / f"{settings.SERVER_INTERFACE}.conf"
+        if wg0_conf.exists():
+            with open(wg0_conf, "a") as f:
+                f.write(f"\n# {client_name}\n")
+        
+        # Save the WireGuard configuration
+        subprocess.check_call(["wg-quick", "save", settings.SERVER_INTERFACE])
         
         # Generate QR code
         qr_path = None
@@ -229,15 +229,29 @@ PersistentKeepalive = 25"""
             "ip_address": client_ip,
             "local_networks": local_networks or []
         }
+        
     except Exception as e:
-        # If writing fails, try to clean up
+        # Clean up if anything fails
         try:
-            if config_path.exists():
+            # Remove from WireGuard if added
+            try:
+                remove_client_from_wg(client_public_key)
+            except:
+                pass
+            
+            # Delete config file if created
+            if config_path and config_path.exists():
                 config_path.unlink()
-            remove_client_from_wg(client_public_key)
-        except:
-            pass
-        raise Exception(f"Failed to write client configuration: {str(e)}")
+                
+            # Delete QR code if created
+            qr_path = config_path.with_suffix('.png') if config_path else None
+            if qr_path and qr_path.exists():
+                qr_path.unlink()
+                
+        except Exception as cleanup_error:
+            print(f"Warning: Cleanup failed: {str(cleanup_error)}")
+            
+        raise Exception(f"Failed to create client: {str(e)}")
 
 def get_available_ip() -> str:
     """Get the next available IP address in the subnet."""
