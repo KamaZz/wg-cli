@@ -10,6 +10,7 @@ A command-line tool for managing WireGuard VPN server and clients.
 - Generate QR codes for client configurations
 - Enable client-to-client network access
 - View client status
+- Automatic configuration detection from existing WireGuard setup
 
 ## Prerequisites
 
@@ -19,36 +20,72 @@ A command-line tool for managing WireGuard VPN server and clients.
 
 ## Installation
 
-1. Clone this repository
-2. Install dependencies:
+1. Clone this repository:
 ```bash
-pip install -r requirements.txt
+git clone https://github.com/KamaZz/wg-cli.git
+cd wg-cli
 ```
 
-3. Create a `.env` file with your configuration:
+2. Run the setup script (requires root privileges):
 ```bash
-WIREGUARD_CONFIG_DIR=/etc/wireguard
-SERVER_PUBLIC_IP=your_server_public_ip
-SERVER_PORT=51820
+chmod +x setup.sh
+sudo ./setup.sh
 ```
+
+This will:
+- Install required system packages (python3-venv)
+- Create a Python virtual environment
+- Install all dependencies in the virtual environment
+- Make the main script executable
 
 ## Usage
 
+1. Activate the virtual environment:
+```bash
+source venv/bin/activate
+```
+
+2. Run the commands (with sudo):
 ```bash
 # Create a new client
-python wg-cli.py add-client client_name
+sudo ./wg-cli.py add-client client_name
 
 # List all clients
-python wg-cli.py list-clients
+sudo ./wg-cli.py list-all
 
 # Delete a client
-python wg-cli.py delete-client client_name
+sudo ./wg-cli.py delete client_name
 
 # Show client QR code
-python wg-cli.py show-qr client_name
+sudo ./wg-cli.py show-qr client_name
 
 # View client status
-python wg-cli.py status
+sudo ./wg-cli.py status
+```
+
+## Configuration
+
+The tool will automatically detect existing WireGuard configurations. You only need to create a `.env` file if you want to override the defaults:
+
+1. Copy the example environment file:
+```bash
+cp .env.example .env
+```
+
+2. Edit the `.env` file with your settings:
+```bash
+# Required only if not using default paths
+WIREGUARD_CONFIG_DIR=/etc/wireguard
+SERVER_INTERFACE=wg0
+
+# Required only if not detected from system
+SERVER_PUBLIC_IP=your_server_public_ip
+
+# Optional settings (will be loaded from existing config if available)
+# SERVER_PORT=51820
+# CLIENT_SUBNET=10.0.0.0/24
+# SERVER_ADDRESS=10.0.0.1/24
+# DNS_SERVERS=1.1.1.1,8.8.8.8
 ```
 
 ## Security Notes
@@ -56,6 +93,7 @@ python wg-cli.py status
 - Keep your private keys secure
 - Regularly update client configurations
 - Monitor server logs for suspicious activity
+- The tool requires root privileges to manage WireGuard configurations
 
 ## License
 
