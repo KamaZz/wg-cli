@@ -1,0 +1,141 @@
+#!/usr/bin/env python3
+import click
+from rich.console import Console
+from rich.table import Table
+from pathlib import Path
+import sys
+import os
+
+from config import settings, ensure_config_dir
+from wireguard import (
+    create_client_config,
+    get_available_ip,
+    generate_qr_code,
+    delete_client,
+    list_clients,
+    get_client_status
+)
+
+console = Console()
+
+def check_root():
+    """Check if the script is running with root privileges."""
+    if os.geteuid() != 0:
+        console.print("[red]This script must be run as root![/red]")
+        sys.exit(1)
+
+@click.group()
+def cli():
+    """WireGuard VPN Server Management CLI"""
+    ensure_config_dir()
+
+@cli.command()
+@click.argument('client_name')
+def add_client(client_name):
+    """Create a new WireGuard client configuration."""
+    check_root()
+    try:
+        # Get next available IP
+        client_ip = get_available_ip()
+        
+        # Create client configuration
+        result = create_client_config(client_name, client_ip)
+        
+        # Generate QR code
+        qr_path = generate_qr_code(client_name)
+        
+        console.print(f"[green]Successfully created client '{client_name}'[/green]")
+        console.print(f"IP Address: {result['ip_address']}")
+        console.print(f"Config file: {result['config_path']}")
+        console.print(f"QR Code: {qr_path}")
+        
+    except Exception as e:
+        console.print(f"[red]Error creating client: {str(e)}[/red]")
+        sys.exit(1)
+
+@cli.command()
+def list_all():
+    """List all configured WireGuard clients."""
+    check_root()
+    try:
+        clients = list_clients()
+        
+        if not clients:
+            console.print("[yellow]No clients configured.[/yellow]")
+            return
+        
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("Client Name")
+        table.add_column("IP Address")
+        table.add_column("Public Key")
+        
+        for client in clients:
+            table.add_row(
+                client['name'],
+                client['ip'],
+                client['public_key']
+            )
+        
+        console.print(table)
+        
+    except Exception as e:
+        console.print(f"[red]Error listing clients: {str(e)}[/red]")
+        sys.exit(1)
+
+@cli.command()
+@click.argument('client_name')
+def delete(client_name):
+    """Delete a WireGuard client configuration."""
+    check_root()
+    try:
+        delete_client(client_name)
+        console.print(f"[green]Successfully deleted client '{client_name}'[/green]")
+    except Exception as e:
+        console.print(f"[red]Error deleting client: {str(e)}[/red]")
+        sys.exit(1)
+
+@cli.command()
+@click.argument('client_name')
+def show_qr(client_name):
+    """Generate and show QR code for a client configuration."""
+    check_root()
+    try:
+        qr_path = generate_qr_code(client_name)
+        console.print(f"[green]QR code generated: {qr_path}[/green]")
+    except Exception as e:
+        console.print(f"[red]Error generating QR code: {str(e)}[/red]")
+        sys.exit(1)
+
+@cli.command()
+def status():
+    """Show the status of all WireGuard connections."""
+    check_root()
+    try:
+        status_list = get_client_status()
+        
+        if not status_list:
+            console.print("[yellow]No active connections.[/yellow]")
+            return
+        
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("Public Key")
+        table.add_column("Latest Handshake")
+        table.add_column("Transfer (↓/↑)")
+        table.add_column("Endpoint")
+        
+        for peer in status_list:
+            table.add_row(
+                peer.get('public_key', 'Unknown'),
+                peer.get('latest handshake', 'Never'),
+                f"{peer.get('transfer', '0/0')}",
+                peer.get('endpoint', 'Unknown')
+            )
+        
+        console.print(table)
+        
+    except Exception as e:
+        console.print(f"[red]Error getting status: {str(e)}[/red]")
+        sys.exit(1)
+
+if __name__ == '__main__':
+    cli() 
