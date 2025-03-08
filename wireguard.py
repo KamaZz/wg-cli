@@ -132,55 +132,63 @@ def list_clients() -> List[Dict[str, str]]:
 def get_client_status() -> List[Dict[str, str]]:
     """Get the status of all connected clients."""
     try:
+        # First, get all configured clients and their information
+        all_clients = list_clients()
+        clients_by_pubkey = {}
+        
+        # Get current status from wireguard
         output = subprocess.check_output(["wg", "show", settings.SERVER_INTERFACE]).decode()
         status = []
         current_peer = None
         
-        # Get all clients first
-        all_clients = list_clients()
-        # Create lookup by public key
-        clients_by_pubkey = {client["public_key"]: client for client in all_clients}
-        
+        # Process the wireguard output
         for line in output.split('\n'):
             if line.startswith('peer:'):
-                if current_peer:
-                    # Add client info to peer before appending
-                    pubkey = current_peer.get('public_key')
-                    if pubkey in clients_by_pubkey:
-                        client = clients_by_pubkey[pubkey]
+                if current_peer and 'public_key' in current_peer:
+                    # Find matching client by public key
+                    matching_client = next(
+                        (client for client in all_clients if client['public_key'] == current_peer['public_key']),
+                        None
+                    )
+                    if matching_client:
                         current_peer.update({
-                            'name': client['name'],
-                            'ip': client['ip'],
-                            'local_networks': client['local_networks']
+                            'name': matching_client['name'],
+                            'ip': matching_client['ip'],
+                            'local_networks': matching_client['local_networks']
                         })
                     # Check handshake status
                     handshake_str = current_peer.get('latest handshake', 'Never')
                     handshake_time = parse_handshake_time(handshake_str)
                     current_peer['alert'] = check_handshake_alert(handshake_time)
                     status.append(current_peer)
-                current_peer = {'public_key': line.split(':')[1].strip()}
+                
+                # Start new peer
+                pubkey = line.split(':')[1].strip()
+                current_peer = {'public_key': pubkey}
+                clients_by_pubkey[pubkey] = current_peer
             elif current_peer and line.strip():
                 key, value = line.strip().split(':', 1)
                 current_peer[key.strip()] = value.strip()
         
-        if current_peer:
-            # Add client info to last peer
-            pubkey = current_peer.get('public_key')
-            if pubkey in clients_by_pubkey:
-                client = clients_by_pubkey[pubkey]
+        # Handle the last peer
+        if current_peer and 'public_key' in current_peer:
+            matching_client = next(
+                (client for client in all_clients if client['public_key'] == current_peer['public_key']),
+                None
+            )
+            if matching_client:
                 current_peer.update({
-                    'name': client['name'],
-                    'ip': client['ip'],
-                    'local_networks': client['local_networks']
+                    'name': matching_client['name'],
+                    'ip': matching_client['ip'],
+                    'local_networks': matching_client['local_networks']
                 })
-            # Check handshake status for last peer
             handshake_str = current_peer.get('latest handshake', 'Never')
             handshake_time = parse_handshake_time(handshake_str)
             current_peer['alert'] = check_handshake_alert(handshake_time)
             status.append(current_peer)
         
         # Add offline clients (those with no current connection)
-        connected_pubkeys = {peer['public_key'] for peer in status}
+        connected_pubkeys = set(clients_by_pubkey.keys())
         for client in all_clients:
             if client['public_key'] not in connected_pubkeys:
                 status.append({
@@ -193,10 +201,20 @@ def get_client_status() -> List[Dict[str, str]]:
                     'endpoint': 'Unknown',
                     'alert': True
                 })
-            
+        
         return status
     except subprocess.CalledProcessError:
-        return []
+        # If wireguard interface is not available, just show configured clients
+        return [{
+            'name': client['name'],
+            'ip': client['ip'],
+            'local_networks': client['local_networks'],
+            'public_key': client['public_key'],
+            'latest handshake': 'Never',
+            'transfer': '0/0',
+            'endpoint': 'Unknown',
+            'alert': True
+        } for client in list_clients()]
 
 def parse_handshake_time(handshake_str: str) -> Optional[datetime]:
     """Parse handshake time string into datetime object."""
