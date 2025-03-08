@@ -20,12 +20,22 @@ def add_client_to_wg(client_name: str, public_key: str, allowed_ips: List[str]) 
             if not ip.startswith('10.') and check_subnet_conflict(ip):
                 raise Exception(f"Subnet conflict: {ip} is already in use by another client")
         
+        # First remove any existing peer with the same public key
+        try:
+            subprocess.check_call([
+                "wg", "set", settings.SERVER_INTERFACE,
+                "peer", public_key,
+                "remove"
+            ])
+        except subprocess.CalledProcessError:
+            pass  # Ignore if peer doesn't exist
+        
         # Add peer to WireGuard interface
         cmd = [
             "wg", "set", settings.SERVER_INTERFACE,
             "peer", public_key,
             "allowed-ips", ",".join(allowed_ips),
-            "endpoint", "0.0.0.0:0"  # Initial endpoint, will be updated when client connects
+            "persistent-keepalive", "25"
         ]
         subprocess.check_call(cmd)
         
@@ -181,12 +191,15 @@ def create_client_config(client_name: str, client_ip: str, local_networks: Optio
             settings.SERVER_PRIVATE_KEY = server_private_key
             settings.SERVER_PUBLIC_KEY = server_public_key
         
-        # Prepare allowed IPs
-        allowed_ips = [f"{client_ip}/32"]
+        # Prepare allowed IPs for server config (client's VPN IP and any local networks)
+        server_allowed_ips = [f"{client_ip}/32"]
         if local_networks:
-            allowed_ips.extend(local_networks)
+            server_allowed_ips.extend(local_networks)
         
-        # For client config, we use /24 for the interface address and 10.10.20.0/24 for allowed IPs
+        # For client config, we use /32 for the interface address
+        # and either 0.0.0.0/0 (all traffic) or specific networks
+        client_allowed_ips = ["0.0.0.0/0"] if not local_networks else [settings.CLIENT_SUBNET] + local_networks
+        
         client_config = f"""[Interface]
 PrivateKey = {client_private_key}
 Address = {client_ip}/32
@@ -194,7 +207,7 @@ DNS = {settings.DNS_SERVERS}
 
 [Peer]
 PublicKey = {settings.SERVER_PUBLIC_KEY}
-AllowedIPs = 10.10.20.0/24
+AllowedIPs = {', '.join(client_allowed_ips)}
 Endpoint = {settings.SERVER_PUBLIC_IP}:{settings.SERVER_PORT}
 PersistentKeepalive = 25"""
 
@@ -202,12 +215,7 @@ PersistentKeepalive = 25"""
         config_path = get_client_config_path(client_name, create=True)
         
         # First try to add to WireGuard interface
-        subprocess.check_output([
-            "wg", "set", settings.SERVER_INTERFACE,
-            "peer", client_public_key,
-            "allowed-ips", ",".join(allowed_ips),
-            "persistent-keepalive", "25"
-        ])
+        add_client_to_wg(client_name, client_public_key, server_allowed_ips)
         
         # If WireGuard command succeeds, write the config file
         config_path.write_text(client_config)
