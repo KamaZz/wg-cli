@@ -129,6 +129,27 @@ def list_clients() -> List[Dict[str, str]]:
     
     return clients
 
+def parse_allowed_ips(allowed_ips_str: str) -> Tuple[str, str]:
+    """Parse allowed IPs string into VPN IP and local networks."""
+    if not allowed_ips_str:
+        return "Unknown", "None"
+        
+    ips = [ip.strip() for ip in allowed_ips_str.split(',')]
+    vpn_ips = []
+    local_networks = []
+    
+    for ip in ips:
+        # Assuming VPN IPs are in 10.x.x.x range (adjust if your VPN subnet is different)
+        if ip.startswith('10.'):
+            vpn_ips.append(ip)
+        else:
+            local_networks.append(ip)
+    
+    return (
+        vpn_ips[0] if vpn_ips else "Unknown",
+        ", ".join(local_networks) if local_networks else "None"
+    )
+
 def get_client_status() -> List[Dict[str, str]]:
     """Get the status of all connected clients."""
     try:
@@ -150,12 +171,14 @@ def get_client_status() -> List[Dict[str, str]]:
                         (client for client in all_clients if client['public_key'] == current_peer['public_key']),
                         None
                     )
-                    if matching_client:
-                        current_peer.update({
-                            'name': matching_client['name'],
-                            'ip': matching_client['ip'],
-                            'local_networks': matching_client['local_networks']
-                        })
+                    
+                    # Get client name from matching client or use first part of public key
+                    current_peer['name'] = matching_client['name'] if matching_client else current_peer['public_key'][:8]
+                    
+                    # Parse allowed IPs
+                    if 'allowed ips' in current_peer:
+                        current_peer['ip'], current_peer['local_networks'] = parse_allowed_ips(current_peer['allowed ips'])
+                    
                     # Check handshake status
                     handshake_str = current_peer.get('latest handshake', 'Never')
                     handshake_time = parse_handshake_time(handshake_str)
@@ -176,12 +199,14 @@ def get_client_status() -> List[Dict[str, str]]:
                 (client for client in all_clients if client['public_key'] == current_peer['public_key']),
                 None
             )
-            if matching_client:
-                current_peer.update({
-                    'name': matching_client['name'],
-                    'ip': matching_client['ip'],
-                    'local_networks': matching_client['local_networks']
-                })
+            
+            # Get client name from matching client or use first part of public key
+            current_peer['name'] = matching_client['name'] if matching_client else current_peer['public_key'][:8]
+            
+            # Parse allowed IPs
+            if 'allowed ips' in current_peer:
+                current_peer['ip'], current_peer['local_networks'] = parse_allowed_ips(current_peer['allowed ips'])
+            
             handshake_str = current_peer.get('latest handshake', 'Never')
             handshake_time = parse_handshake_time(handshake_str)
             current_peer['alert'] = check_handshake_alert(handshake_time)
