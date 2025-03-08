@@ -28,7 +28,8 @@ from wireguard import (
     generate_qr_code,
     delete_client,
     list_clients,
-    get_client_status
+    get_client_status,
+    delete_inactive_clients
 )
 
 console = Console()
@@ -178,6 +179,18 @@ def status():
         
     except Exception as e:
         console.print(f"[red]Error getting status: {str(e)}[/red]")
+        sys.exit(1)
+
+@cli.command()
+@click.option('--force', is_flag=True, help='Skip confirmation and delete all inactive clients')
+def delete_inactive(force):
+    """Delete clients that haven't connected within the handshake threshold."""
+    try:
+        deleted = delete_inactive_clients(force)
+        if deleted:
+            console.print(f"\nSuccessfully deleted {len(deleted)} inactive clients.")
+    except Exception as e:
+        console.print(f"Error deleting inactive clients: {str(e)}", err=True)
         sys.exit(1)
 
 if __name__ == '__main__':

@@ -94,6 +94,22 @@ PersistentKeepalive = 25"""
         # Write configuration with secure permissions
         config_path.write_text(client_config)
         config_path.chmod(0o600)  # Set secure permissions (only owner can read/write)
+        
+        # Generate QR code
+        try:
+            qr_path = generate_qr_code(client_name)
+        except Exception as qr_error:
+            print(f"Warning: Failed to generate QR code: {str(qr_error)}")
+            qr_path = None
+            
+        return {
+            "private_key": client_private_key,
+            "public_key": client_public_key,
+            "config_path": str(config_path),
+            "qr_path": str(qr_path) if qr_path else None,
+            "ip_address": client_ip,
+            "local_networks": local_networks or []
+        }
     except Exception as e:
         # If writing fails, try to clean up
         try:
@@ -103,14 +119,6 @@ PersistentKeepalive = 25"""
         except:
             pass
         raise Exception(f"Failed to write client configuration: {str(e)}")
-    
-    return {
-        "private_key": client_private_key,
-        "public_key": client_public_key,
-        "config_path": str(config_path),
-        "ip_address": client_ip,
-        "local_networks": local_networks or []
-    }
 
 def get_available_ip() -> str:
     """Get the next available IP address in the subnet."""
@@ -380,3 +388,50 @@ def check_subnet_conflict(subnet: str) -> bool:
         if used_subnet == subnet:
             return True
     return False 
+
+def delete_inactive_clients(force: bool = False) -> List[str]:
+    """Delete clients that haven't connected within the handshake threshold.
+    
+    Args:
+        force: If True, skip confirmation and delete all inactive clients
+        
+    Returns:
+        List of deleted client names
+    """
+    # Get current client status
+    clients = get_client_status()
+    
+    # Filter inactive clients
+    inactive_clients = [
+        client for client in clients 
+        if client.get('alert', True) and  # Clients with alert flag
+        client.get('latest handshake', 'Never') != 'Never'  # Exclude never connected clients
+    ]
+    
+    if not inactive_clients:
+        print("No inactive clients found.")
+        return []
+    
+    # Print inactive clients
+    print("\nInactive clients (no handshake for more than {} days):".format(settings.HANDSHAKE_ALERT_DAYS))
+    for client in inactive_clients:
+        print(f"- {client['name']}: Last handshake {client.get('latest handshake', 'Never')}")
+    
+    # Ask for confirmation unless force is True
+    if not force:
+        confirmation = input(f"\nDo you want to delete these {len(inactive_clients)} inactive clients? [y/N]: ")
+        if confirmation.lower() != 'y':
+            print("Operation cancelled.")
+            return []
+    
+    # Delete confirmed inactive clients
+    deleted_clients = []
+    for client in inactive_clients:
+        try:
+            delete_client(client['name'])
+            deleted_clients.append(client['name'])
+            print(f"Deleted client: {client['name']}")
+        except Exception as e:
+            print(f"Failed to delete client {client['name']}: {str(e)}")
+    
+    return deleted_clients 
