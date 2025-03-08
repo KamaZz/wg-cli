@@ -83,6 +83,69 @@ def generate_qr_code(client_name: str) -> Path:
     
     return qr_path
 
+def get_used_ips() -> List[str]:
+    """Get list of IP addresses currently in use from both wg0.conf and client configs."""
+    used_ips = []
+    
+    # Check main WireGuard config
+    wg0_config = Path(settings.WIREGUARD_CONFIG_DIR) / f"{settings.SERVER_INTERFACE}.conf"
+    if wg0_config.exists():
+        try:
+            content = wg0_config.read_text()
+            # Find all AllowedIPs entries
+            for line in content.splitlines():
+                if line.strip().startswith('AllowedIPs'):
+                    ips = line.split('=')[1].strip().split(',')
+                    for ip in ips:
+                        ip = ip.strip()
+                        if ip.startswith('10.'):  # Only collect VPN IPs
+                            ip = ip.split('/')[0]  # Remove subnet mask
+                            used_ips.append(ip)
+        except Exception as e:
+            print(f"Warning: Error reading {wg0_config}: {str(e)}")
+    
+    # Check client configs
+    clients_dir = Path(settings.WIREGUARD_CLIENTS_DIR)
+    for config_file in clients_dir.glob("*.conf"):
+        try:
+            content = config_file.read_text()
+            ip_match = re.search(r"Address = ([\d\.]+)/", content)
+            if ip_match:
+                used_ips.append(ip_match.group(1))
+        except Exception as e:
+            print(f"Warning: Error reading {config_file}: {str(e)}")
+    
+    return list(set(used_ips))  # Remove duplicates
+
+def check_client_exists(client_name: str) -> bool:
+    """Check if a client with the given name or IP already exists in either location.
+    
+    Args:
+        client_name: Name of the client to check
+        
+    Returns:
+        True if client exists, False otherwise
+    """
+    # Check in clients directory
+    config_path = get_client_config_path(client_name)
+    if config_path.exists():
+        return True
+    
+    # Check in main WireGuard config
+    wg0_config = Path(settings.WIREGUARD_CONFIG_DIR) / f"{settings.SERVER_INTERFACE}.conf"
+    if wg0_config.exists():
+        try:
+            content = wg0_config.read_text()
+            # Look for a peer section with a comment matching the client name
+            sections = content.split('[Peer]')
+            for section in sections:
+                if f"# {client_name}" in section:
+                    return True
+        except Exception as e:
+            print(f"Warning: Error reading {wg0_config}: {str(e)}")
+    
+    return False
+
 def create_client_config(client_name: str, client_ip: str, local_networks: Optional[List[str]] = None) -> Dict[str, str]:
     """Create a new client configuration.
     
@@ -91,6 +154,15 @@ def create_client_config(client_name: str, client_ip: str, local_networks: Optio
         client_ip: VPN IP address for the client
         local_networks: Optional list of local network subnets (e.g., ["192.168.1.0/24"])
     """
+    # Check if client already exists in either location
+    if check_client_exists(client_name):
+        raise Exception(f"Client '{client_name}' already exists (check both {settings.SERVER_INTERFACE}.conf and clients directory)")
+    
+    # Check if IP is already in use
+    used_ips = get_used_ips()
+    if client_ip in used_ips:
+        raise Exception(f"IP address {client_ip} is already in use by another client")
+    
     client_private_key, client_public_key = generate_keypair()
     
     # Ensure server keys exist
@@ -104,11 +176,25 @@ def create_client_config(client_name: str, client_ip: str, local_networks: Optio
     if local_networks:
         allowed_ips.extend(local_networks)
     
-    # Add client to WireGuard interface
-    add_client_to_wg(client_name, client_public_key, allowed_ips)
+    # Add client to WireGuard interface with a comment to identify it
+    try:
+        subprocess.check_output([
+            "wg", "set", settings.SERVER_INTERFACE,
+            "peer", client_public_key,
+            "allowed-ips", ",".join(allowed_ips),
+            "persistent-keepalive", "25"
+        ])
+        
+        # Add a comment to identify the peer in wg0.conf
+        with open(Path(settings.WIREGUARD_CONFIG_DIR) / f"{settings.SERVER_INTERFACE}.conf", "a") as f:
+            f.write(f"\n# {client_name}\n")
+        
+        # Save the configuration
+        subprocess.check_call(["wg-quick", "save", settings.SERVER_INTERFACE])
+    except subprocess.CalledProcessError as e:
+        raise Exception(f"Failed to add client to WireGuard: {str(e)}")
     
-    # For client config, we use /24 for the interface address and 0.0.0.0/0 for allowed IPs
-    # This ensures the client routes all traffic through VPN but can still access allowed local networks
+    # For client config, we use /24 for the interface address and 10.10.20.0/24 for allowed IPs
     client_config = f"""[Interface]
 PrivateKey = {client_private_key}
 Address = {client_ip}/24
@@ -116,7 +202,7 @@ DNS = {settings.DNS_SERVERS}
 
 [Peer]
 PublicKey = {settings.SERVER_PUBLIC_KEY}
-AllowedIPs = 0.0.0.0/0
+AllowedIPs = 10.10.20.0/24
 Endpoint = {settings.SERVER_PUBLIC_IP}:{settings.SERVER_PORT}
 PersistentKeepalive = 25"""
 
@@ -126,7 +212,7 @@ PersistentKeepalive = 25"""
     try:
         # Write configuration with secure permissions
         config_path.write_text(client_config)
-        config_path.chmod(0o600)  # Set secure permissions (only owner can read/write)
+        config_path.chmod(0o600)
         
         # Generate QR code
         qr_path = None
@@ -163,19 +249,6 @@ def get_available_ip() -> str:
         if ip not in used_ips:
             return ip
     raise Exception("No available IP addresses")
-
-def get_used_ips() -> List[str]:
-    """Get list of IP addresses currently in use."""
-    used_ips = []
-    clients_dir = Path(settings.WIREGUARD_CLIENTS_DIR)
-    
-    for config_file in clients_dir.glob("*.conf"):
-        content = config_file.read_text()
-        ip_match = re.search(r"Address = ([\d\.]+)/", content)
-        if ip_match:
-            used_ips.append(ip_match.group(1))
-    
-    return used_ips
 
 def delete_client(client_name: str) -> None:
     """Delete a client configuration and remove from WireGuard."""
